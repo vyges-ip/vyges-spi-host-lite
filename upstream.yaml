@@ -1,0 +1,18 @@
+schema_version: "vyges-upstream-v1"
+upstream:
+  type: "standalone"
+  repo: https://github.com/vyges/vyges-spi-host-lite
+  branch: main
+  commit: b9c1d206503d4123b45794c13b4cb5fd729eac9e
+  extracted_at: "2026-03-28T01:51:07Z"
+import:
+  rtl:
+    - path: "rtl"
+      map_to: "rtl"
+  license:
+    - path: "LICENSE"
+  readme:
+    - path: "README.md"
+license:
+  spdx: Apache-2.0
+  file: LICENSE
