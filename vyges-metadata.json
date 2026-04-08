@@ -3,7 +3,7 @@
   "x-version": "1.0.0",
   "name": "vyges-spi-host-lite",
   "version": "0.1.0",
-  "description": "Lightweight SPI master controller with TL-UL slave interface, supporting SPI modes 0–3, configurable clock divider, and interrupt-driven TX/RX FIFO operations.",
+  "description": "Lightweight SPI master controller with TL-UL slave interface, supporting SPI modes 0\u20133, configurable clock divider, and interrupt-driven TX/RX FIFO operations.",
   "license": "Apache-2.0",
   "maturity": "rtl_verified",
   "target": [
@@ -134,7 +134,7 @@
   "architecture": {
     "type": "peripheral",
     "features": [
-      "Supports SPI modes 0–3 (CPOL/CPHA configurable)",
+      "Supports SPI modes 0\u20133 (CPOL/CPHA configurable)",
       "Configurable clock divider (SCLK = clk_i / (2 * (div+1)))",
       "8/16/32-bit transfer length",
       "TX and RX FIFOs with configurable depth",
@@ -198,5 +198,8 @@
     "schema": {
       "version": "1.0.0"
     }
+  },
+  "branding": {
+    "display_name": "SPI Host"
   }
 }
