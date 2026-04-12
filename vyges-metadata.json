@@ -55,7 +55,21 @@
       "protocol": "TL-UL",
       "port": "tl_i",
       "width": 1,
-      "description": "TL-UL host-to-device interface input."
+      "description": "TL-UL host-to-device interface input.",
+      "signals": [
+        {
+          "name": "tl_i",
+          "direction": "input",
+          "type": "bus",
+          "description": "TL-UL host-to-device (tl_h2d_t struct)"
+        },
+        {
+          "name": "tl_o",
+          "direction": "output",
+          "type": "bus",
+          "description": "TL-UL device-to-host (tl_d2h_t struct)"
+        }
+      ]
     },
     {
       "type": "bus",
@@ -63,7 +77,21 @@
       "protocol": "TL-UL",
       "port": "tl_o",
       "width": 1,
-      "description": "TL-UL device-to-host interface output."
+      "description": "TL-UL device-to-host interface output.",
+      "signals": [
+        {
+          "name": "tl_i",
+          "direction": "input",
+          "type": "bus",
+          "description": "TL-UL host-to-device (tl_h2d_t struct)"
+        },
+        {
+          "name": "tl_o",
+          "direction": "output",
+          "type": "bus",
+          "description": "TL-UL device-to-host (tl_d2h_t struct)"
+        }
+      ]
     },
     {
       "type": "serial",
@@ -158,7 +186,17 @@
   },
   "dependencies": [],
   "test": {
-    "testbenches": [],
+    "testbenches": [
+      {
+        "name": "soc_integration",
+        "path": "tb/cocotb/",
+        "framework": "cocotb",
+        "simulators": [
+          "verilator"
+        ],
+        "description": "SoC-level integration verified in edge-sensor-soc"
+      }
+    ],
     "status": "upstream_passing",
     "coverage": "functional"
   },
