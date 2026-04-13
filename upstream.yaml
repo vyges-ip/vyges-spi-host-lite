@@ -3,7 +3,7 @@ upstream:
   type: "standalone"
   repo: https://github.com/vyges/vyges-spi-host-lite
   branch: main
-  commit: 87d8b76871b791b251c831af40dbaad175ed3e27
+  commit: 7cbf577c480d9e6edd928b5fa99bddc859b886d9
   extracted_at: "2026-03-28T01:51:07Z"
 import:
   rtl:
