@@ -13,6 +13,8 @@ import:
     - path: "LICENSE"
   readme:
     - path: "README.md"
+  metadata:
+    - path: "vyges-metadata.json"
 license:
   spdx: Apache-2.0
   file: LICENSE
