@@ -73,7 +73,11 @@ module spi_host_lite
   logic       rsp_write_q;
 
   // A channel unpack
-  assign req_valid  = tl_i.a_valid;
+  // A request is accepted only when the response slot is free or being
+  // consumed, so a response the host has stalled is never overwritten.
+  logic req_a_ready;
+  assign req_a_ready = !rsp_valid || tl_i.d_ready;
+  assign req_valid  = tl_i.a_valid && req_a_ready;
   assign req_write  = (tl_i.a_opcode == tlul_pkg::PutFullData) || (tl_i.a_opcode == tlul_pkg::PutPartialData);
   assign req_addr   = tl_i.a_address;
   assign req_wdata  = tl_i.a_data;
@@ -81,14 +85,14 @@ module spi_host_lite
   assign req_source = tl_i.a_source;
   assign req_size   = tl_i.a_size;
 
-  // Single-cycle response (always ready)
+  // Single-cycle response
   // Build pre-integrity response; tlul_rsp_intg_gen below signs rsp_intg +
   // data_intg so CPU-side tlul_rsp_intg_chk (always-on in opentitan-rv-core-
   // ibex's tlul_adapter_host) accepts the d-channel. Without this, any CPU
   // transaction to SPI traps Ibex on the first response. See the Bus
   // security domain contract work item in deckrun-server/docs/todo.md.
   tl_d2h_t tl_o_pre;
-  assign tl_o_pre.a_ready  = 1'b1;
+  assign tl_o_pre.a_ready  = req_a_ready;
   assign tl_o_pre.d_valid  = rsp_valid;
   // Use LATCHED _q versions — req_write / req_size / req_source track the
   // current cycle's a_channel input, but rsp_valid is pipelined 1 cycle so
@@ -122,7 +126,7 @@ module spi_host_lite
       rsp_source_q <= '0;
       rsp_size_q   <= '0;
       rsp_write_q  <= 1'b0;
-    end else begin
+    end else if (req_a_ready) begin
       rsp_valid    <= req_valid;
       rsp_source_q <= req_source;
       rsp_size_q   <= req_size;
@@ -163,8 +167,13 @@ module spi_host_lite
   // Register write
   // -------------------------------------------------------------------------
 
-  logic [7:0] reg_offset;
-  assign reg_offset = req_addr[7:0];
+  // The device occupies a 4 KB region: decode all twelve offset bits so
+  // the registers do not repeat through it.
+  logic [11:0] reg_offset;
+  assign reg_offset = req_addr[11:0];
+
+  logic reg_mapped;
+  assign reg_mapped = (reg_offset <= 12'h01C) && (reg_offset[1:0] == 2'b00);
 
   always_ff @(posedge clk_i or negedge rst_ni) begin
     if (!rst_ni) begin
@@ -178,36 +187,40 @@ module spi_host_lite
       reg_intr_en   <= 3'b0;
       reg_intr_st   <= 3'b0;
     end else begin
-      // Interrupt status set
-      if (tx_empty)     reg_intr_st[0] <= 1'b1;
-      if (rx_full)      reg_intr_st[1] <= 1'b1;
-      if (spi_idle_edge) reg_intr_st[2] <= 1'b1;
-
       if (req_valid && req_write) begin
         case (reg_offset)
-          8'h00: begin  // CTRL
+          12'h000: if (req_mask[0]) begin  // CTRL
             reg_enable   <= req_wdata[0];
             reg_cpol     <= req_wdata[1];
             reg_cpha     <= req_wdata[2];
             reg_xfer_len <= req_wdata[4:3];
             reg_loopback <= req_wdata[5];   // CTRL[5] — internal loopback
           end
-          8'h08: reg_div       <= req_wdata[15:0];  // DIV
-          8'h14: reg_cs_assert <= req_wdata[0];      // CSCTRL
-          8'h18: reg_intr_en   <= req_wdata[2:0];    // INTR_EN
-          8'h1C: reg_intr_st   <= reg_intr_st & ~req_wdata[2:0];  // INTR_ST (W1C)
+          12'h008: begin  // DIV
+            if (req_mask[0]) reg_div[7:0]  <= req_wdata[7:0];
+            if (req_mask[1]) reg_div[15:8] <= req_wdata[15:8];
+          end
+          12'h014: if (req_mask[0]) reg_cs_assert <= req_wdata[0];      // CSCTRL
+          12'h018: if (req_mask[0]) reg_intr_en   <= req_wdata[2:0];    // INTR_EN
+          12'h01C: if (req_mask[0]) reg_intr_st   <= reg_intr_st & ~req_wdata[2:0];  // INTR_ST (W1C)
           default: ;
         endcase
       end
+
+      // Interrupt status set. After the write handling, so an event in the
+      // same cycle as a write to INTR_ST is not lost.
+      if (tx_empty)     reg_intr_st[0] <= 1'b1;
+      if (rx_full)      reg_intr_st[1] <= 1'b1;
+      if (spi_idle_edge) reg_intr_st[2] <= 1'b1;
     end
   end
 
   // TX FIFO push on write to TXDATA
-  assign tx_push  = req_valid && req_write && (reg_offset == 8'h0C) && !tx_full;
+  assign tx_push  = req_valid && req_write && (reg_offset == 12'h00C) && !tx_full;
   assign tx_wdata = req_wdata;
 
   // RX FIFO pop on read from RXDATA
-  assign rx_pop = req_valid && !req_write && (reg_offset == 8'h10) && !rx_empty;
+  assign rx_pop = req_valid && !req_write && (reg_offset == 12'h010) && !rx_empty;
 
   // -------------------------------------------------------------------------
   // Register read
@@ -220,19 +233,22 @@ module spi_host_lite
     end else if (req_valid && !req_write) begin
       rsp_error <= 1'b0;
       case (reg_offset)
-        8'h00: rsp_rdata <= {26'b0, reg_loopback, reg_xfer_len, reg_cpha, reg_cpol, reg_enable};
-        8'h04: rsp_rdata <= {27'b0, rx_empty, rx_full, tx_empty, tx_full, spi_busy};
-        8'h08: rsp_rdata <= {16'b0, reg_div};
-        8'h10: rsp_rdata <= rx_rdata;
-        8'h14: rsp_rdata <= {31'b0, reg_cs_assert};
-        8'h18: rsp_rdata <= {29'b0, reg_intr_en};
-        8'h1C: rsp_rdata <= {29'b0, reg_intr_st};
+        12'h000: rsp_rdata <= {26'b0, reg_loopback, reg_xfer_len, reg_cpha, reg_cpol, reg_enable};
+        12'h004: rsp_rdata <= {27'b0, rx_empty, rx_full, tx_empty, tx_full, spi_busy};
+        12'h008: rsp_rdata <= {16'b0, reg_div};
+        12'h010: rsp_rdata <= rx_rdata;
+        12'h014: rsp_rdata <= {31'b0, reg_cs_assert};
+        12'h018: rsp_rdata <= {29'b0, reg_intr_en};
+        12'h01C: rsp_rdata <= {29'b0, reg_intr_st};
         default: begin
           rsp_rdata <= '0;
           rsp_error <= 1'b1;
         end
       endcase
-    end else begin
+    end else if (req_valid && req_write) begin
+      rsp_rdata <= '0;
+      rsp_error <= !reg_mapped;
+    end else if (req_a_ready) begin
       rsp_rdata <= '0;
       rsp_error <= 1'b0;
     end
@@ -351,9 +367,17 @@ module spi_host_lite
   // leading edges shift normally. In CPHA=0 this stays 0 and has no effect.
   logic        first_leading_skip;
 
+  // Settings for the word in flight, latched when it loads. A write to CTRL
+  // or DIV during a transfer takes effect from the next word.
+  logic [1:0]  xfer_len_q;
+  logic        cpol_q;
+  logic        cpha_q;
+  logic        loopback_q;
+  logic [15:0] div_q;
+
   // Bit count based on transfer length
   always_comb begin
-    case (reg_xfer_len)
+    case (xfer_len_q)
       2'd0: bit_max = 6'd7;    // 8-bit
       2'd1: bit_max = 6'd15;   // 16-bit
       2'd2: bit_max = 6'd31;   // 32-bit
@@ -367,7 +391,7 @@ module spi_host_lite
       clk_cnt  <= '0;
       clk_edge <= 1'b0;
     end else if (state_q == ST_SHIFT) begin
-      if (clk_cnt == reg_div) begin
+      if (clk_cnt == div_q) begin
         clk_cnt  <= '0;
         clk_edge <= 1'b1;
       end else begin
@@ -394,6 +418,11 @@ module spi_host_lite
       bit_cnt   <= '0;
       spi_busy_prev <= 1'b0;
       first_leading_skip <= 1'b0;
+      xfer_len_q <= 2'b0;
+      cpol_q     <= 1'b0;
+      cpha_q     <= 1'b0;
+      loopback_q <= 1'b0;
+      div_q      <= '0;
     end else begin
       spi_busy_prev <= spi_busy;
 
@@ -419,6 +448,11 @@ module spi_host_lite
             endcase
             shift_rx <= '0;
             bit_cnt  <= '0;
+            xfer_len_q <= reg_xfer_len;
+            cpol_q     <= reg_cpol;
+            cpha_q     <= reg_cpha;
+            loopback_q <= reg_loopback;
+            div_q      <= reg_div;
             state_q  <= ST_LOAD;
           end
         end
@@ -427,7 +461,7 @@ module spi_host_lite
           // One cycle to latch data, then shift. In CPHA=1 modes the
           // first leading edge must not shift -- slave samples bit 7 on
           // the first trailing edge and MOSI must still hold bit 7.
-          first_leading_skip <= reg_cpha;
+          first_leading_skip <= cpha_q;
           state_q <= ST_SHIFT;
         end
 
@@ -436,10 +470,10 @@ module spi_host_lite
             // MISO source mux: external pin in normal mode, MOSI echo in
             // loopback mode. MOSI is shift_tx[31] -- the bit we're about
             // to (or just did) drive on the external pin.
-            automatic logic miso_sample = reg_loopback ? shift_tx[31] : spi_miso_i;
-            if (!sclk_q ^ reg_cpol) begin
+            automatic logic miso_sample = loopback_q ? shift_tx[31] : spi_miso_i;
+            if (!sclk_q ^ cpol_q) begin
               // Leading edge: sample MISO (CPHA=0) or shift MOSI (CPHA=1)
-              if (!reg_cpha) begin
+              if (!cpha_q) begin
                 shift_rx <= {shift_rx[30:0], miso_sample};
               end else begin
                 // CPHA=1: skip the very first leading-edge shift so MOSI
@@ -454,7 +488,7 @@ module spi_host_lite
               sclk_q <= ~sclk_q;
             end else begin
               // Trailing edge: shift MOSI (CPHA=0) or sample MISO (CPHA=1)
-              if (!reg_cpha) begin
+              if (!cpha_q) begin
                 shift_tx <= {shift_tx[30:0], 1'b0};
               end else begin
                 shift_rx <= {shift_rx[30:0], miso_sample};
@@ -471,7 +505,7 @@ module spi_host_lite
         end
 
         ST_DONE: begin
-          sclk_q <= reg_cpol;
+          sclk_q <= cpol_q;
           state_q <= ST_IDLE;
         end
 
